@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nim GraphQL Client - Karax Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #7f8c8d;
+            font-size: 1.2em;
+        }
+        
+        .demo-info {
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .demo-info h3 {
+            color: #1976d2;
+            margin-top: 0;
+        }
+        
+        .demo-info code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .error-message {
+            background: #ffebee;
+            border: 1px solid #f44336;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            color: #c62828;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .loading::before {
+            content: "⟳";
+            font-size: 2em;
+            animation: spin 1s linear infinite;
+            display: block;
+            margin-bottom: 10px;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        #app {
+            min-height: 400px;
+        }
+        
+        .instructions {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 30px;
+        }
+        
+        .instructions h3 {
+            color: #2c3e50;
+            margin-top: 0;
+        }
+        
+        .instructions ol {
+            line-height: 1.6;
+        }
+        
+        .instructions li {
+            margin-bottom: 10px;
+        }
+        
+        .code-block {
+            background: #2d3748;
+            color: #f7fafc;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Nim GraphQL Client</h1>
+            <p>Karax интеграция за счетоводни системи</p>
+        </div>
+        
+        <div class="demo-info">
+            <h3>📋 За да работи демото:</h3>
+            <ol>
+                <li>Стартирайте GraphQL сървъра на <code>http://localhost:8080/accounting/graphql</code></li>
+                <li>Компилирайте Karax приложението: <code>nim js -d:release -o:karax_app.js karax_app.nim</code></li>
+                <li>Отворете този файл в браузър</li>
+            </ol>
+        </div>
+        
+        <!-- Тук ще се зареди Karax приложението -->
+        <div id="app">
+            <div class="loading">
+                Зареждане на приложението...
+            </div>
+        </div>
+        
+        <div class="instructions">
+            <h3>🔧 Инструкции за разработка</h3>
+            
+            <h4>Стартиране на сървъра:</h4>
+            <div class="code-block">
+cd ../../../<br>
+nim c -r examples/graphql_example.nim
+            </div>
+            
+            <h4>Компилиране на клиента:</h4>
+            <div class="code-block">
+nim js -d:release -o:karax_app.js karax_app.nim
+            </div>
+            
+            <h4>Тестване на основния клиент:</h4>
+            <div class="code-block">
+nim c -r basic_usage.nim
+            </div>
+            
+            <h4>Функционалности на демото:</h4>
+            <ul>
+                <li>📊 Списък със сметки с филтриране</li>
+                <li>➕ Създаване на нови сметки</li>
+                <li>📈 Оборотна ведомост</li>
+                <li>🔄 Автоматично кеширане</li>
+                <li>⚡ Real-time обновления</li>
+                <li>🎨 Responsive дизайн</li>
+            </ul>
+        </div>
+    </div>
+    
+    <!-- Зареждане на Karax приложението -->
+    <script>
+        // Проверка дали JavaScript файлът е наличен
+        function loadKaraxApp() {
+            const script = document.createElement('script');
+            script.src = 'karax_app.js';
+            script.onload = function() {
+                console.log('Karax приложението е заредено успешно!');
+            };
+            script.onerror = function() {
+                document.getElementById('app').innerHTML = `
+                    <div class="error-message">
+                        <h3>❌ Грешка при зареждане</h3>
+                        <p>JavaScript файлът <code>karax_app.js</code> не е намерен.</p>
+                        <p>Моля, компилирайте Karax приложението първо:</p>
+                        <div class="code-block">nim js -d:release -o:karax_app.js karax_app.nim</div>
+                    </div>
+                `;
+            };
+            document.head.appendChild(script);
+        }
+        
+        // Опит за зареждане след кратко забавяне
+        setTimeout(loadKaraxApp, 1000);
+    </script>
+</body>
+</html>

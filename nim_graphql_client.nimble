@@ -12,10 +12,6 @@ bin           = @[]
 
 requires "nim >= 1.6.0"
 requires "karax >= 1.3.0"
-requires "asyncdispatch"
-requires "httpclient"
-requires "json"
-requires "uri"
 
 # Tasks
 

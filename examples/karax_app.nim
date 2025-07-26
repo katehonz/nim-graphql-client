@@ -10,6 +10,8 @@ type
     currentPage: string
     selectedAccountId: int
     createAccountForm: CreateAccountForm
+    currentAccountTypeFilter: string
+    currentDate: string
     
   CreateAccountForm = object
     code: string
@@ -25,7 +27,9 @@ var appState = AppState(
     name: "",
     accountType: "ASSET",
     errors: @[]
-  )
+  ),
+  currentAccountTypeFilter: "",
+  currentDate: "2024-12-31"
 )
 
 # Компонент за навигация
@@ -185,7 +189,7 @@ proc AccountDetails(account: JsonNode): VNode =
 
 # Компонент за списък със сметки с филтриране
 proc AccountsPage(): VNode =
-  let accountsResult = useAccounts(20, "")  # Вземаме повече сметки
+  let accountsResult = useAccounts(20, appState.currentAccountTypeFilter)  # Вземаме повече сметки
   
   result = buildHtml(tdiv(class = "accounts-page")):
     h1: text "Сметки"
@@ -194,8 +198,7 @@ proc AccountsPage(): VNode =
     tdiv(class = "filters"):
       label: text "Тип сметка: "
       select(onchange = proc(ev: Event) =
-        let selectedType = $ev.target.value
-        # TODO: Обновяване на филтъра
+        appState.currentAccountTypeFilter = $ev.target.value
         redraw()
       ):
         option(value = ""): text "Всички"
@@ -247,14 +250,52 @@ proc AccountDetailPage(): VNode =
             if account.hasKey("parentId") and account["parentId"].kind != JNull:
               p: text "Родителска сметка ID: " & $account["parentId"].getInt()
             
-            # TODO: Списък с транзакции за тази сметка
-            p: text "История на транзакциите: (в разработка)"
+              # Транзакции за сметката
+              let transactionsResult = useAccountTransactions(account["id"].getInt())
+              
+              h4: text "Транзакции"
+              
+              renderData(transactionsResult.data, transactionsResult.loading, transactionsResult.error,
+                proc(data: JsonNode): VNode =
+                  let edges = data["accountTransactions"]["edges"]
+                  
+                  buildHtml(tdiv):
+                    if edges.len == 0:
+                      p: text "Няма транзакции"
+                    
+                    for edge in edges:
+                      let transaction = edge["node"]
+                      let date = transaction["date"].getStr()
+                      let description = transaction["description"].getStr()
+                      let debit = transaction["debit"]["amount"].getStr() & " " & transaction["debit"]["currency"].getStr()
+                      let credit = transaction["credit"]["amount"].getStr() & " " & transaction["credit"]["currency"].getStr()
+                      let balanceAfter = transaction["balanceAfter"]["amount"].getStr() & " " & transaction["balanceAfter"]["currency"].getStr()
+                      
+                      tdiv(class = "transaction-item"):
+                        tdiv(class = "transaction-header"):
+                          strong: text date
+                          span(class = "description"): text description
+                        
+                        tdiv(class = "transaction-details"):
+                          tdiv(class = "transaction-row"):
+                            span(class = "label"): text "Дебит:"
+                            span(class = "value debit"): text debit
+                          
+                          tdiv(class = "transaction-row"):
+                            span(class = "label"): text "Кредит:"
+                            span(class = "value credit"): text credit
+                          
+                          tdiv(class = "transaction-row"):
+                            span(class = "label"): text "Баланс след:"
+                            span(class = "value balance"): text balanceAfter
+                    
+                    button(onclick = transactionsResult.refetch):
+                      text "Обнови транзакциите"
     )
 
 # Компонент за оборотна ведомост с подобрения
 proc TrialBalancePage(): VNode =
-  let today = "2024-12-31"  # За примера използваме фиксирана дата
-  let balanceResult = useTrialBalance(today)
+  let balanceResult = useTrialBalance(appState.currentDate)
   
   result = buildHtml(tdiv(class = "trial-balance-page")):
     h1: text "Оборотна ведомост"
@@ -262,13 +303,13 @@ proc TrialBalancePage(): VNode =
     # Избор на дата
     tdiv(class = "date-selector"):
       label: text "Дата: "
-      input(
-        `type` = "date",
-        value = today,
-        onchange = proc(ev: Event) =
-          # TODO: Обновяване на датата
-          discard
-      )
+        input(
+          `type` = "date",
+          value = appState.currentDate,
+          onchange = proc(ev: Event) =
+            appState.currentDate = $ev.target.value
+            redraw()
+        )
     
     renderData(balanceResult.data, balanceResult.loading, balanceResult.error,
       proc(data: JsonNode): VNode =
@@ -315,11 +356,35 @@ proc TrialBalancePage(): VNode =
             button(onclick = balanceResult.refetch):
               text "Обнови данни"
             
-            button(onclick = proc() =
-              # TODO: Експорт в PDF/Excel
-              discard
+            button(
+              `class` = "export-button",
+              onclick = proc() =
+                # Експорт на оборотната ведомост като CSV
+                let csvData = newStringStream()
+                csvData.write("Код,Име,Дебит,Кредит\n")
+                
+                for account in trialBalance["accounts"]:
+                  let code = account["accountCode"].getStr()
+                  let name = account["accountName"].getStr()
+                  let debit = account["debitBalance"]["amount"].getStr()
+                  let credit = account["creditBalance"]["amount"].getStr()
+                  
+                  csvData.write(code & "," & name & "," & debit & "," & credit & "\n")
+                
+                # Създаване на CSV файл и изтегляне
+                let csvContent = csvData.data
+                let blob = newBlob([csvContent], "text/csv;charset=utf-8;")
+                let url = URL.createObjectURL(blob)
+                
+                let a = document.createElement("a")
+                a.href = url
+                a.download = "оборотна_ведомост_" & appState.currentDate & ".csv"
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
             ):
-              text "Експорт"
+              text "Експорт като CSV"
     )
 
 # Главен компонент на приложението

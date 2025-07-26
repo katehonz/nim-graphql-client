@@ -11,6 +11,10 @@ A powerful and easy-to-use GraphQL client for Nim, specifically designed to work
 - ✅ **Error handling** - detailed error handling and retry logic
 - ✅ **TypeScript-like types** - strong typing for GraphQL operations
 - ✅ **Ready-made components** - pre-built components for accounting operations
+- ✅ **Real-time subscriptions** - WebSocket integration for live updates
+- ✅ **Account filtering** - filter accounts by type in UI
+- ✅ **Transaction history** - view account transactions with details
+- ✅ **CSV export** - export reports to CSV format
 
 ## 📦 Installation
 

@@ -1,5 +1,8 @@
 import httpclient, json, asyncdispatch, uri, strutils, tables, options
-import std/[logging, base64]
+import std/[logging, base64, random]
+import graphql_types
+export graphql_types
+
 when defined(js):
   import dom, jsffi, jsconsole
   
@@ -77,11 +80,11 @@ proc newGraphQLRequest*(query: string, variables: JsonNode = newJObject(),
   )
 
 # Помощни функции
-proc generateCacheKey(request: GraphQLRequest): string =
+proc generateCacheKey*(request: GraphQLRequest): string =
   ## Генерира ключ за кеширане
   result = request.query & "|" & $request.variables & "|" & $request.operationName
 
-proc parseGraphQLResponse(jsonStr: string): GraphQLResponse =
+proc parseGraphQLResponse*(jsonStr: string): GraphQLResponse =
   ## Парсира GraphQL отговор от JSON
   let jsonData = parseJson(jsonStr)
   
@@ -91,7 +94,7 @@ proc parseGraphQLResponse(jsonStr: string): GraphQLResponse =
   # Парсиране на грешки
   if jsonData.hasKey("errors") and jsonData{"errors"}.kind == JArray:
     for errorJson in jsonData{"errors"}:
-      var error = GraphQLClientError(message: errorJson{"message"}.getStr("Unknown error"))
+      var error = GraphQLClientError(msg: errorJson{"message"}.getStr("Unknown error"))
       
       if errorJson.hasKey("extensions"):
         error.extensions = errorJson{"extensions"}
@@ -125,7 +128,7 @@ proc execute*(client: GraphQLClient, request: GraphQLRequest): Future[GraphQLRes
   
   # Валидация на заявката
   if not validateGraphQLQuery(request.query):
-    var error = GraphQLClientError(message: "Invalid GraphQL query")
+    var error = GraphQLClientError(msg: "Invalid GraphQL query")
     result.errors.add(error)
     return result
   
@@ -141,10 +144,10 @@ proc execute*(client: GraphQLClient, request: GraphQLRequest): Future[GraphQLRes
   var attempts = 0
   var lastError: ref Exception = nil
   
-  # Retry логика
+  # Retry логика с подобрен exponential backoff
   while attempts <= client.config.retries:
     try:
-      let response = await client.httpClient.post(client.config.endpoint, $requestData)
+      let response = client.httpClient.post(client.config.endpoint, $requestData)
       
       if response.code == Http200:
         result = parseGraphQLResponse(response.body)
@@ -154,8 +157,34 @@ proc execute*(client: GraphQLClient, request: GraphQLRequest): Future[GraphQLRes
           client.cache[cacheKey] = result
         
         return result
-      else:
-        var error = GraphQLClientError(message: "HTTP Error: " & $response.code & " - " & response.body)
+      elif response.code == Http429:  # Too Many Requests
+        # Специална обработка за rate limiting
+        var error = GraphQLClientError(msg: "Rate limited: " & response.body)
+        error.extensions = %* {"code": "RATE_LIMITED", "statusCode": 429}
+        
+        if attempts < client.config.retries:
+          # Увеличаваме времето за изчакване при rate limiting
+          let backoffMs = min(1000 * (1 shl attempts), 30000)  # Max 30 seconds
+          await sleepAsync(backoffMs)
+          attempts += 1
+          continue
+        else:
+          result.errors.add(error)
+          return result
+      elif response.code.int >= 500:  # Server errors - retry
+        if attempts < client.config.retries:
+          let backoffMs = min(1000 * (1 shl attempts), 10000)  # Max 10 seconds
+          await sleepAsync(backoffMs)
+          attempts += 1
+          continue
+        else:
+          var error = GraphQLClientError(msg: "Server Error: " & $response.code & " - " & response.body)
+          error.extensions = %* {"code": "SERVER_ERROR", "statusCode": response.code.int}
+          result.errors.add(error)
+          return result
+      else:  # Client errors - don't retry
+        var error = GraphQLClientError(msg: "HTTP Error: " & $response.code & " - " & response.body)
+        error.extensions = %* {"code": "CLIENT_ERROR", "statusCode": response.code.int}
         result.errors.add(error)
         return result
         
@@ -163,10 +192,15 @@ proc execute*(client: GraphQLClient, request: GraphQLRequest): Future[GraphQLRes
       lastError = e
       attempts += 1
       if attempts <= client.config.retries:
-        await sleepAsync(1000 * attempts)  # Exponential backoff
+        # Exponential backoff с jitter
+        let baseDelay = 1000 * (1 shl (attempts - 1))
+        let jitter = rand(baseDelay div 4)  # До 25% jitter
+        let backoffMs = min(baseDelay + jitter, 10000)  # Max 10 seconds
+        await sleepAsync(backoffMs)
   
   # Ако всички опити са неуспешни
-  var error = GraphQLClientError(message: "Request failed after " & $client.config.retries & " retries: " & lastError.msg)
+  var error = GraphQLClientError(msg: "Request failed after " & $client.config.retries & " retries: " & lastError.msg)
+  error.extensions = %* {"code": "NETWORK_ERROR", "attempts": attempts}
   result.errors.add(error)
 
 proc executeSync*(client: GraphQLClient, request: GraphQLRequest): GraphQLResponse =
@@ -268,7 +302,7 @@ proc buildTrialBalanceQuery*(asOfDate: string): string =
   ## Създава заявка за оборотна ведомост
   result = """
     query TrialBalance {
-      trialBalance(asOfDate: \"""" & asOfDate & """\") {
+      trialBalance(date: \"""" & asOfDate & """\") {
         asOfDate
         accounts {
           accountCode
@@ -303,7 +337,7 @@ proc getAccount*(client: GraphQLClient, id: int): Future[JsonNode] {.async.} =
   let response = await client.execute(request)
   
   if response.errors.len > 0:
-    raise newException(GraphQLClientError, response.errors[0].message)
+    raise newException(GraphQLClientError, response.errors[0].msg)
   
   result = response.data{"account"}
 
@@ -314,7 +348,7 @@ proc getAccountByCode*(client: GraphQLClient, code: string): Future[JsonNode] {.
   let response = await client.execute(request)
   
   if response.errors.len > 0:
-    raise newException(GraphQLClientError, response.errors[0].message)
+    raise newException(GraphQLClientError, response.errors[0].msg)
   
   result = response.data{"account"}
 
@@ -326,7 +360,7 @@ proc getAccounts*(client: GraphQLClient, first: int = 10, after: string = "",
   let response = await client.execute(request)
   
   if response.errors.len > 0:
-    raise newException(GraphQLClientError, response.errors[0].message)
+    raise newException(GraphQLClientError, response.errors[0].msg)
   
   result = response.data{"accounts"}
 
@@ -338,7 +372,7 @@ proc createAccount*(client: GraphQLClient, code: string, name: string,
   let response = await client.execute(request)
   
   if response.errors.len > 0:
-    raise newException(GraphQLClientError, response.errors[0].message)
+    raise newException(GraphQLClientError, response.errors[0].msg)
   
   result = response.data{"createAccount"}
 
@@ -349,7 +383,7 @@ proc getTrialBalance*(client: GraphQLClient, asOfDate: string): Future[JsonNode]
   let response = await client.execute(request)
   
   if response.errors.len > 0:
-    raise newException(GraphQLClientError, response.errors[0].message)
+    raise newException(GraphQLClientError, response.errors[0].msg)
   
   result = response.data{"trialBalance"}
 
@@ -369,6 +403,54 @@ proc close*(client: GraphQLClient) =
   client.httpClient.close()
 
 # Браузърни subscription функции (само за JS target)
+proc buildAccountTransactionsQuery*(accountId: int, first: int = 10, after: string = ""): string =
+  ## Създава заявка за транзакции по сметка
+  var args = "accountId: " & $accountId & ", first: " & $first
+  if after.len > 0:
+    args &= ", after: \"" & after & "\""
+  
+  result = """
+    query GetAccountTransactions {
+      accountTransactions(""" & args & """) {
+        edges {
+          node {
+            id
+            date
+            description
+            debit {
+              amount
+              currency
+            }
+            credit {
+              amount
+              currency
+            }
+            balanceAfter {
+              amount
+              currency
+            }
+          }
+          cursor
+        }
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+        }
+      }
+    }
+  """
+
+proc getAccountTransactions*(client: GraphQLClient, accountId: int, first: int = 10, after: string = ""): Future[JsonNode] {.async.} =
+  ## Получава транзакции за сметка
+  let query = buildAccountTransactionsQuery(accountId, first, after)
+  let request = newGraphQLRequest(query)
+  let response = await client.execute(request)
+  
+  if response.errors.len > 0:
+    raise newException(GraphQLClientError, response.errors[0].msg)
+  
+  result = response.data{"accountTransactions"}
+
 when defined(js):
   proc createWebSocketConnection*(url: string): WebSocketConnection =
     ## Създава WebSocket връзка за subscriptions
@@ -392,6 +474,148 @@ when defined(js):
     client.subscriptions.del(subscriptionId)
     console.log("Subscription stopped: ", subscriptionId)
 
+# Типизирани методи за често използвани операции
+proc getAccountTyped*(client: GraphQLClient, id: int): Future[Account] {.async.} =
+  ## Получава сметка по ID и връща типизиран обект
+  let query = buildAccountQuery(id = id)
+  let request = newGraphQLRequest(query)
+  let response = await client.execute(request)
+  
+  if response.errors.len > 0:
+    raise newException(GraphQLClientError, response.errors[0].msg)
+  
+  result = response.data{"account"}.toAccount()
+
+proc getAccountByCodeTyped*(client: GraphQLClient, code: string): Future[Account] {.async.} =
+  ## Получава сметка по код и връща типизиран обект
+  if not isValidAccountCode(code):
+    raise newException(ValueError, "Invalid account code: " & code)
+  
+  let query = buildAccountQuery(code = code)
+  let request = newGraphQLRequest(query)
+  let response = await client.execute(request)
+  
+  if response.errors.len > 0:
+    raise newException(GraphQLClientError, response.errors[0].msg)
+  
+  result = response.data{"account"}.toAccount()
+
+proc getAccountsTyped*(client: GraphQLClient, filter: AccountFilter = AccountFilter(), 
+                      pagination: PaginationInput = PaginationInput()): Future[Connection[Account]] {.async.} =
+  ## Получава списък със сметки с филтриране и пагинация
+  var query = newQueryBuilder("query", "GetAccounts")
+  
+  # Добавяне на аргументи
+  if filter.accountTypes.isSome:
+    var types: seq[string] = @[]
+    for t in filter.accountTypes.get():
+      types.add($t)
+    query.addArgument("accountTypes", "[" & types.join(", ") & "]")
+  
+  if pagination.first.isSome:
+    query.addArgument("first", $pagination.first.get())
+  
+  if pagination.after.isSome:
+    query.addArgument("after", "\"" & pagination.after.get() & "\"")
+  
+  # Добавяне на полета
+  query.addField("edges { node { id code name accountType balance { amount currency } isActive } cursor }")
+  query.addField("pageInfo { hasNextPage hasPreviousPage totalCount startCursor endCursor }")
+  
+  let request = newGraphQLRequest(query.build())
+  let response = await client.execute(request)
+  
+  if response.errors.len > 0:
+    raise newException(GraphQLClientError, response.errors[0].msg)
+  
+  result = response.data{"accounts"}.toConnection(toAccount)
+
+proc createAccountTyped*(client: GraphQLClient, input: CreateAccountInput): Future[Account] {.async.} =
+  ## Създава нова сметка с типизиран вход
+  if not isValidAccountCode(input.code):
+    raise newException(ValueError, "Invalid account code: " & input.code)
+  
+  let mutation = """
+    mutation CreateAccount($input: CreateAccountInput!) {
+      createAccount(input: $input) {
+        id code name accountType balance { amount currency } isActive createdAt updatedAt
+      }
+    }
+  """
+  
+  var inputJson = %* {
+    "code": input.code,
+    "name": input.name,
+    "accountType": $input.accountType,
+    "currency": $input.currency
+  }
+  
+  if input.parentId.isSome:
+    inputJson["parentId"] = %input.parentId.get()
+  
+  if input.metadata.isSome:
+    inputJson["metadata"] = input.metadata.get()
+  
+  let variables = %* {"input": inputJson}
+  let request = newGraphQLRequest(mutation, variables)
+  let response = await client.execute(request)
+  
+  if response.errors.len > 0:
+    raise newException(GraphQLClientError, response.errors[0].msg)
+  
+  result = response.data{"createAccount"}.toAccount()
+
+proc createTransactionTyped*(client: GraphQLClient, input: CreateTransactionInput): Future[Transaction] {.async.} =
+  ## Създава нова транзакция с валидация
+  if not isBalanced(input.entries):
+    raise newException(ValueError, "Transaction entries are not balanced")
+  
+  let mutation = """
+    mutation CreateTransaction($input: CreateTransactionInput!) {
+      createTransaction(input: $input) {
+        id transactionNumber date description status
+        entries { id accountId accountCode debit { amount currency } credit { amount currency } description }
+        totalAmount { amount currency }
+        createdAt updatedAt
+      }
+    }
+  """
+  
+  var entriesJson: seq[JsonNode] = @[]
+  for entry in input.entries:
+    if not isValidAmount(entry.debit) or not isValidAmount(entry.credit):
+      raise newException(ValueError, "Invalid amount in journal entry")
+    
+    var entryJson = %* {
+      "accountCode": entry.accountCode,
+      "debit": entry.debit,
+      "credit": entry.credit,
+      "description": entry.description
+    }
+    
+    if entry.referenceNumber.isSome:
+      entryJson["referenceNumber"] = %entry.referenceNumber.get()
+    
+    entriesJson.add(entryJson)
+  
+  var inputJson = %* {
+    "date": input.date,
+    "description": input.description,
+    "entries": entriesJson
+  }
+  
+  if input.metadata.isSome:
+    inputJson["metadata"] = input.metadata.get()
+  
+  let variables = %* {"input": inputJson}
+  let request = newGraphQLRequest(mutation, variables)
+  let response = await client.execute(request)
+  
+  if response.errors.len > 0:
+    raise newException(GraphQLClientError, response.errors[0].msg)
+  
+  result = response.data{"createTransaction"}.toTransaction()
+
 # Debug функции
 proc printResponse*(response: GraphQLResponse) =
   ## Принтира GraphQL отговор за debug
@@ -401,7 +625,7 @@ proc printResponse*(response: GraphQLResponse) =
   if response.errors.len > 0:
     echo "  Errors:"
     for error in response.errors:
-      echo "    - ", error.message
+      echo "    - ", error.msg
       if error.path.len > 0:
         echo "      Path: ", error.path.join(" -> ")
   

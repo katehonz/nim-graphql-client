@@ -1,4 +1,4 @@
-import unittest, asyncdispatch, json, tables, httpclient
+import unittest, asyncdispatch, json, tables, httpclient, options, strutils
 import ../src/graphql_client
 
 # Тестове за GraphQL клиент
@@ -67,7 +67,7 @@ suite "GraphQL клиент тестове":
     check response.data["user"]["name"].getStr() == "Тест"
     
     check response.errors.len == 1
-    check response.errors[0].message == "Test error"
+    check response.errors[0].msg == "Test error"
     check response.errors[0].path == @["user", "email"]
     check response.errors[0].extensions != nil
   
@@ -136,7 +136,7 @@ suite "GraphQL клиент тестове":
       path: @["user", "name"]
     )
     
-    check error.message == "Test error"
+    check error.msg == "Test error"
     check error.extensions["code"].getStr() == "TEST_ERROR"
     check error.path == @["user", "name"]
   
@@ -153,7 +153,7 @@ suite "GraphQL клиент тестове":
     # Отговор с грешки
     let errorResponse = GraphQLResponse(
       data: nil,
-      errors: @[GraphQLClientError(message: "Error")],
+      errors: @[GraphQLClientError(msg: "Error")],
       extensions: nil
     )
     

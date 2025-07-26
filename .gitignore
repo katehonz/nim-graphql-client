@@ -1,0 +1,43 @@
+# Nim
+nimcache/
+nimblecache/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build outputs
+examples/*.js
+examples/*.js.map
+tests/test_*
+!tests/*.nim
+
+# Documentation
+docs/
+htmldocs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+*.coverage
+
+# Package directories
+node_modules/
+.nimble/
+
+# Environment
+.env
+.env.local

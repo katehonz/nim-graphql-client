@@ -1,6 +1,8 @@
 import karax / [karax, kdom, kajax, vdom]
 import asyncjs, json, strutils, tables, options
 import graphql_client
+when defined(js):
+  import dom
 
 # Karax интеграция за GraphQL клиент
 # Осигурява реактивни компоненти и state management
@@ -25,6 +27,7 @@ type
     data*: Option[T]
     connected*: bool
     error*: Option[string]
+    wsConnection*: JsObject  # WebSocket reference
     
   # Кеш за заявки
   QueryCache* = ref object
@@ -216,8 +219,113 @@ proc useSubscription*(subscription: string, variables: JsonNode = newJObject()):
       error: none(string)
     )
     
-    # TODO: Имплементиране на WebSocket логика за real-time subscriptions
-    console.log("Starting subscription: ", key)
+    let httpPrefix = if context.client.config.endpoint.startsWith("https"): "https" else: "http"
+    let wsPrefix = if httpPrefix == "https": "wss" else: "ws"
+    let wsUrl = context.client.config.endpoint.replace(httpPrefix, wsPrefix)
+    
+    # Setup WebSocket connection with reconnection logic
+    var ws: JsObject
+    var reconnectAttempts = 0
+    var maxReconnectAttempts = 5
+    var reconnectDelay = 1000  # Start with 1 second
+    var pingInterval: JsObject = nil
+    var isIntentionalClose = false
+    
+    proc setupWebSocket() =
+      ws = newWebSocket(wsUrl)
+      
+      ws.onopen = proc() =
+        reconnectAttempts = 0
+        reconnectDelay = 1000
+        
+        # Initialize connection
+        let initMsg = %* {"type": "connection_init"}
+        ws.send($initMsg)
+        
+        # Start subscription
+        let subscribeMsg = %* {
+          "id": key,
+          "type": "start",
+          "payload": {
+            "query": subscription,
+            "variables": variables
+          }
+        }
+        ws.send($subscribeMsg)
+        context.subscriptions[key].connected = true
+        context.subscriptions[key].error = none(string)
+        
+        # Setup ping to keep connection alive
+        if pingInterval != nil:
+          discard window.clearInterval(pingInterval)
+        
+        pingInterval = window.setInterval(proc() =
+          if ws.readyState == 1:  # OPEN
+            ws.send($(%* {"type": "ping"}))
+        , 30000)  # Ping every 30 seconds
+        
+        redraw()
+      
+      ws.onmessage = proc(event: JsObject) =
+        try:
+          let data = parseJson(event.data)
+          case data["type"].getStr()
+          of "data":
+            context.subscriptions[key].data = some(data["payload"]["data"])
+          of "error":
+            if data["payload"].len > 0:
+              context.subscriptions[key].error = some(data["payload"][0]["message"].getStr())
+            else:
+              context.subscriptions[key].error = some("Subscription error")
+          of "complete":
+            isIntentionalClose = true
+            ws.close()
+          of "pong":
+            # Server acknowledged our ping
+            discard
+          of "connection_ack":
+            # Connection acknowledged
+            discard
+          else:
+            discard
+          redraw()
+        except:
+          context.subscriptions[key].error = some("Invalid message format")
+          redraw()
+      
+      ws.onerror = proc(event: JsObject) =
+        context.subscriptions[key].error = some("WebSocket connection error")
+        context.subscriptions[key].connected = false
+        redraw()
+      
+      ws.onclose = proc(event: JsObject) =
+        context.subscriptions[key].connected = false
+        
+        if pingInterval != nil:
+          discard window.clearInterval(pingInterval)
+          pingInterval = nil
+        
+        # Attempt to reconnect if not intentionally closed
+        if not isIntentionalClose and reconnectAttempts < maxReconnectAttempts:
+          reconnectAttempts += 1
+          context.subscriptions[key].error = some("Connection lost. Reconnecting in " & $(reconnectDelay div 1000) & "s...")
+          
+          discard window.setTimeout(proc() =
+            setupWebSocket()
+          , reconnectDelay)
+          
+          # Exponential backoff
+          reconnectDelay = min(reconnectDelay * 2, 30000)  # Max 30 seconds
+        elif reconnectAttempts >= maxReconnectAttempts:
+          context.subscriptions[key].error = some("Failed to reconnect after " & $maxReconnectAttempts & " attempts")
+        
+        redraw()
+    
+    # Store WebSocket reference for cleanup
+    context.subscriptions[key].wsConnection = ws
+    
+    # Initial connection
+    setupWebSocket()
   
   result = context.subscriptions[key]
 
@@ -270,6 +378,13 @@ proc useTrialBalance*(asOfDate: string): GraphQLHookResult[JsonNode] =
 proc useCreateAccount*(): proc(code: string, name: string, accountType: string): Future[JsonNode] =
   ## Hook за създаване на сметка
   let mutation = useMutation(buildCreateAccountMutation("", "", ""))
+  
+  # Transaction hooks
+  proc useAccountTransactions*(accountId: int, first: int = 10, after: string = ""): GraphQLHookResult[JsonNode] =
+    ## Hook за транзакции по сметка
+    let query = buildAccountTransactionsQuery(accountId, first, after)
+    let variables = %* {"accountId": accountId, "first": first, "after": after}
+    result = useQuery(query, variables, "account_transactions_" & $accountId)
   
   result = proc(code: string, name: string, accountType: string): Future[JsonNode] =
     let variables = %* {

@@ -32,6 +32,18 @@ nimble test
 
 ## 🚀 Quick Start
 
+### Important: SSL Support
+
+When working with HTTPS endpoints, you must compile with SSL support:
+
+```bash
+# Compile with SSL support
+nim c -d:ssl your_file.nim
+
+# Or run directly
+nim c -d:ssl -r your_file.nim
+```
+
 ### Basic Usage
 
 ```nim
@@ -424,18 +436,60 @@ initApp()
 
 ## 🧪 Testing
 
+### Quick Test with Public APIs
+
 ```bash
-# All tests
+# Test with real GraphQL endpoints
+nim c -d:ssl -r test_quick.nim
+
+# Run comprehensive public API examples
+nim c -d:ssl -r examples/public_api_example.nim
+```
+
+### Available Public APIs for Testing
+
+The client has been tested with these public GraphQL APIs:
+
+1. **Countries API** - https://countries.trevorblades.com/graphql
+   - No authentication required
+   - Provides data about countries, continents, and languages
+   - Perfect for basic testing
+
+2. **SpaceX API** - https://spacex-production.up.railway.app/
+   - Space exploration data
+   - Launches, rockets, missions information
+   - No authentication required
+
+3. **Rick and Morty API** - https://rickandmortyapi.com/graphql
+   - Character, episode, and location data
+   - Great for testing pagination and filtering
+
+### Running Tests
+
+```bash
+# All unit tests
 nimble test
+
+# Quick test with public API
+nimble test_public
 
 # Basic examples
 nimble example_basic
+
+# Public API examples
+nimble example_public
+
+# Advanced usage examples
+nimble example_advanced
 
 # Karax example (generates JS file)
 nimble example_karax
 
 # Generate documentation
 nimble docs
+
+# Clean build artifacts
+nimble clean
 ```
 
 ### Unit Tests
@@ -449,6 +503,39 @@ nimble docs
 - Cache operations
 - Error handling
 - Integration tests (if server available)
+```
+
+### Example: Testing with Countries API
+
+```nim
+import graphql_client
+import asyncdispatch, json
+
+proc testCountriesAPI() {.async.} =
+  # No authentication needed
+  let client = newGraphQLClient("https://countries.trevorblades.com/graphql")
+  
+  # Simple query
+  let query = """
+    query {
+      country(code: "BG") {
+        name
+        capital
+        emoji
+        currency
+      }
+    }
+  """
+  
+  let request = newGraphQLRequest(query)
+  let response = await client.execute(request)
+  
+  if response.isSuccess():
+    echo pretty(response.data)
+  
+  client.close()
+
+waitFor testCountriesAPI()
 ```
 
 ## 📈 Performance
